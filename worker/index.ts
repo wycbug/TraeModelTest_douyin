@@ -42,15 +42,16 @@ const fetchWithRetry = async (
     const response = await fetch(url, {
       ...options,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         ...options.headers,
       },
     });
-    
+
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    
+
     return response;
   } catch (error) {
     if (retries > 0) {
@@ -65,15 +66,18 @@ const fetchWithRetry = async (
 
 // 验证抖音链接格式
 const validateDouyinUrl = (url: string): boolean => {
-  const regex = /(https?:\/\/)?(www\.)?(douyin\.com|iesdouyin\.com|v\.douyin\.com)\/.+/;
+  const regex =
+    /(https?:\/\/)?(www\.)?(douyin\.com|iesdouyin\.com|v\.douyin\.com)\/.+/;
   return regex.test(url);
 };
 
 // 解析单个视频
-const parseSingleVideo = async (videoUrl: string): Promise<{
+const parseSingleVideo = async (
+  videoUrl: string
+): Promise<{
   code: number;
   msg: string;
-  data: DouyinApiResponse['data'] | null;
+  data: DouyinApiResponse["data"] | null;
 }> => {
   if (!validateDouyinUrl(videoUrl)) {
     return {
@@ -84,7 +88,9 @@ const parseSingleVideo = async (videoUrl: string): Promise<{
   }
 
   try {
-    const apiUrl = `https://api.pearktrue.cn/api/video/douyin/?url=${encodeURIComponent(videoUrl)}`;
+    const apiUrl = `https://api.pearktrue.cn/api/video/douyin/?url=${encodeURIComponent(
+      videoUrl
+    )}`;
     const response = await fetchWithRetry(apiUrl, {}, 3);
     const data = (await response.json()) as DouyinApiResponse;
 
@@ -113,7 +119,7 @@ const parseSingleVideo = async (videoUrl: string): Promise<{
       };
     }
   } catch (err) {
-    console.error('Parse error:', err);
+    console.error("Parse error:", err);
     return {
       code: 500,
       msg: "解析失败，请稍后重试",
@@ -122,18 +128,60 @@ const parseSingleVideo = async (videoUrl: string): Promise<{
   }
 };
 
+// 定义批量解析结果的数据类型
+interface BatchParseResult {
+  url: string;
+  code: number;
+  msg: string;
+  data: DouyinApiResponse["data"] | null;
+}
+
+// 解析多个视频（批量）
+const parseBatchVideos = async (
+  urls: string[]
+): Promise<BatchParseResult[]> => {
+  // 去重和过滤空字符串
+  const uniqueUrls = Array.from(
+    new Set(urls.filter((url) => url.trim() !== ""))
+  ).slice(0, 10); // 最多处理10条
+
+  const results: BatchParseResult[] = [];
+
+  for (const url of uniqueUrls) {
+    const trimmedUrl = url.trim();
+    try {
+      const result = await parseSingleVideo(trimmedUrl);
+      results.push({
+        url: trimmedUrl,
+        code: result.code,
+        msg: result.msg,
+        data: result.data,
+      });
+    } catch (error) {
+      results.push({
+        url: trimmedUrl,
+        code: 500,
+        msg: "解析失败，请稍后重试",
+        data: null,
+      });
+    }
+  }
+
+  return results;
+};
+
 export default {
   async fetch(request) {
     const url = new URL(request.url);
 
     // 处理CORS预检请求
-    if (request.method === 'OPTIONS') {
+    if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 200,
         headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
         },
       });
     }
@@ -164,10 +212,10 @@ export default {
                 msg: "请求过于频繁，请稍后重试",
                 data: null,
               },
-              { 
+              {
                 status: 429,
                 headers: {
-                  'Access-Control-Allow-Origin': '*',
+                  "Access-Control-Allow-Origin": "*",
                 },
               }
             );
@@ -177,7 +225,10 @@ export default {
       }
 
       // API解析端点
-      if ((url.pathname === "/api/parse" || url.pathname === "/api/") && request.method === "GET") {
+      if (
+        (url.pathname === "/api/parse" || url.pathname === "/api/") &&
+        request.method === "GET"
+      ) {
         const videoUrl = url.searchParams.get("url");
 
         if (!videoUrl) {
@@ -187,10 +238,10 @@ export default {
               msg: "请提供视频URL参数",
               data: null,
             },
-            { 
+            {
               status: 400,
               headers: {
-                'Access-Control-Allow-Origin': '*',
+                "Access-Control-Allow-Origin": "*",
               },
             }
           );
@@ -199,9 +250,54 @@ export default {
         const result = await parseSingleVideo(videoUrl);
         return Response.json(result, {
           headers: {
-            'Access-Control-Allow-Origin': '*',
+            "Access-Control-Allow-Origin": "*",
           },
         });
+      }
+
+      // 批量解析端点
+      if (url.pathname === "/api/batch" && request.method === "POST") {
+        try {
+          const body = (await request.json()) as { urls?: string[] };
+          const urls = body.urls || [];
+
+          if (!Array.isArray(urls) || urls.length === 0) {
+            return Response.json(
+              {
+                code: 400,
+                msg: "请提供视频URL列表",
+                data: null,
+              },
+              {
+                status: 400,
+                headers: {
+                  "Access-Control-Allow-Origin": "*",
+                },
+              }
+            );
+          }
+
+          const results = await parseBatchVideos(urls);
+          return Response.json(results, {
+            headers: {
+              "Access-Control-Allow-Origin": "*",
+            },
+          });
+        } catch (error) {
+          return Response.json(
+            {
+              code: 400,
+              msg: "请求体格式错误",
+              data: null,
+            },
+            {
+              status: 400,
+              headers: {
+                "Access-Control-Allow-Origin": "*",
+              },
+            }
+          );
+        }
       }
     }
 
