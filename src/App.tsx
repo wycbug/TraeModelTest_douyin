@@ -37,12 +37,22 @@ interface HistoryRecord {
   timestamp: number;
 }
 
+// 定义批量解析结果的数据类型
+interface BatchParseResult {
+  url: string;
+  code: number;
+  msg: string;
+  data: VideoData | null;
+}
+
 function App() {
   // 状态管理
-  const [videoUrl, setVideoUrl] = useState("");
+  const [videoUrls, setVideoUrls] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [videoData, setVideoData] = useState<VideoData | null>(null);
+  const [batchResults, setBatchResults] = useState<BatchParseResult[]>([]);
+  const [batchProgress, setBatchProgress] = useState(0);
   const [exportFields, setExportFields] = useState<Record<string, boolean>>({
     author: true,
     author_id: true,
@@ -90,32 +100,12 @@ function App() {
   };
 
   // 处理链接输入变化
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let url = e.target.value;
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const urls = e.target.value;
     setError("");
-
-    // 链接格式自动识别和清理
-    if (url) {
-      // 清理链接中的多余参数
-      try {
-        const parsedUrl = new URL(url);
-        // 只保留必要的参数
-        parsedUrl.searchParams.delete("utm_source");
-        parsedUrl.searchParams.delete("utm_medium");
-        parsedUrl.searchParams.delete("utm_campaign");
-        parsedUrl.searchParams.delete("share_source");
-        parsedUrl.searchParams.delete("share_medium");
-        parsedUrl.searchParams.delete("share_plat");
-        parsedUrl.searchParams.delete("share_session_id");
-        parsedUrl.searchParams.delete("share_tag");
-
-        url = parsedUrl.toString();
-      } catch (error) {
-        // 忽略无效URL的错误
-      }
-    }
-
-    setVideoUrl(url);
+    setVideoData(null);
+    setBatchResults([]);
+    setVideoUrls(urls);
   };
 
   // 解析短链接
@@ -139,22 +129,18 @@ function App() {
     return regex.test(url);
   };
 
-  // 解析视频链接
-  const parseVideo = async () => {
-    if (!videoUrl) {
-      setError("请输入视频链接");
-      return;
-    }
-
+  // 解析单个视频
+  const parseSingleVideo = async (url: string) => {
     setLoading(true);
     setError("");
     setVideoData(null);
+    setBatchResults([]);
 
     try {
       // 解析短链接
-      let resolvedUrl = videoUrl;
-      if (videoUrl.includes("v.douyin.com")) {
-        resolvedUrl = await resolveShortUrl(videoUrl);
+      let resolvedUrl = url;
+      if (url.includes("v.douyin.com")) {
+        resolvedUrl = await resolveShortUrl(url);
       }
 
       // 验证抖音链接格式
@@ -189,6 +175,114 @@ function App() {
       setError("网络错误，请稍后重试");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // 批量解析视频
+  const parseBatchVideos = async () => {
+    if (!videoUrls) {
+      setError("请输入视频链接");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    setVideoData(null);
+    setBatchResults([]);
+    setBatchProgress(0);
+
+    try {
+      // 按行拆分链接
+      const urls = videoUrls.split('\n').filter(url => url.trim() !== '');
+      
+      if (urls.length === 0) {
+        setError("请输入有效的抖音视频链接");
+        setLoading(false);
+        return;
+      }
+
+      // 批量解析最多支持10条
+      const batchUrls = urls.slice(0, 10);
+      const results: BatchParseResult[] = [];
+
+      // 逐个解析视频并更新进度
+      for (let i = 0; i < batchUrls.length; i++) {
+        const url = batchUrls[i];
+        try {
+          // 解析短链接
+          let resolvedUrl = url;
+          if (url.includes("v.douyin.com")) {
+            resolvedUrl = await resolveShortUrl(url);
+          }
+
+          // 验证抖音链接格式
+          if (!validateDouyinUrl(resolvedUrl)) {
+            results.push({
+              url: resolvedUrl,
+              code: 400,
+              msg: "无效的抖音视频链接",
+              data: null
+            });
+          } else {
+            const response = await fetch(
+              `/api/parse?url=${encodeURIComponent(resolvedUrl)}`
+            );
+            const data = await response.json();
+
+            results.push({
+              url: resolvedUrl,
+              code: data.code,
+              msg: data.msg,
+              data: data.data
+            });
+
+            // 保存成功的记录到历史
+            if (data.code === 200 && data.data) {
+              const record: HistoryRecord = {
+                id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+                videoUrl: resolvedUrl,
+                videoData: data.data,
+                timestamp: Date.now(),
+              };
+              saveHistory(record);
+            }
+          }
+        } catch (err) {
+          results.push({
+            url: url,
+            code: 500,
+            msg: "网络错误，请稍后重试",
+            data: null
+          });
+        }
+
+        // 更新进度
+        setBatchProgress(Math.round(((i + 1) / batchUrls.length) * 100));
+        setBatchResults([...results]);
+      }
+    } catch (err) {
+      setError("网络错误，请稍后重试");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 解析视频链接（自动检测单条/批量）
+  const parseVideo = async () => {
+    if (!videoUrls) {
+      setError("请输入视频链接");
+      return;
+    }
+
+    // 按行拆分链接
+    const urls = videoUrls.split('\n').filter(url => url.trim() !== '');
+    
+    if (urls.length === 1) {
+      // 单条解析
+      await parseSingleVideo(urls[0]);
+    } else {
+      // 批量解析
+      await parseBatchVideos();
     }
   };
 
@@ -315,12 +409,14 @@ function App() {
       
       <div className="tab-panel">
           <div className="input-section">
-            <input
-              type="text"
-              value={videoUrl}
+            <textarea
+              value={videoUrls}
               onChange={handleInputChange}
-              placeholder="请输入抖音视频链接（支持多种格式）"
+              placeholder={videoUrls.includes('\n') ? 
+                "已检测到多条链接，将自动进行批量解析（最多10条）" : 
+                "请输入抖音视频链接（支持多种格式，多行输入自动批量解析）"}
               disabled={loading}
+              rows={videoUrls.includes('\n') ? Math.min(videoUrls.split('\n').length, 5) : 1}
             />
             <button onClick={parseVideo} disabled={loading}>
               {loading ? "解析中..." : "解析视频"}
@@ -328,6 +424,20 @@ function App() {
           </div>
 
           {error && <div className="error-message">{error}</div>}
+
+          {loading && batchProgress > 0 && (
+            <div className="progress-section">
+              <div className="progress-bar-container">
+                <div 
+                  className="progress-bar-fill"
+                  style={{ width: `${batchProgress}%` }}
+                ></div>
+              </div>
+              <div className="progress-text">
+                批量解析中... {batchProgress}%
+              </div>
+            </div>
+          )}
 
           {videoData && (
             <div className="result-section">
@@ -461,6 +571,74 @@ function App() {
               </div>
             </div>
           )}
+
+          {batchResults.length > 0 && (
+            <div className="batch-result-section">
+              <h2>批量解析结果</h2>
+              
+              <div className="export-buttons">
+                <button 
+                  onClick={() => exportToCSV(batchResults.filter(r => r.code === 200).map(r => r.data!).filter(d => d))} 
+                  disabled={loading}
+                >
+                  仅导出成功项
+                </button>
+              </div>
+              
+              <div className="batch-results-list">
+                {batchResults.map((result, index) => (
+                  <div key={index} className={`batch-result-item ${result.code === 200 ? 'success' : 'error'}`}>
+                    <div className="batch-result-header">
+                      <div className="result-status">
+                        {result.code === 200 ? '成功' : '失败'}
+                      </div>
+                      <div className="result-url">
+                        <a href={result.url} target="_blank" rel="noopener noreferrer">
+                          {result.url.length > 50 ? result.url.substring(0, 50) + '...' : result.url}
+                        </a>
+                      </div>
+                    </div>
+                    
+                    {result.code === 200 && result.data && (
+                      <div className="batch-result-content">
+                        <img 
+                          src={result.data.cover} 
+                          alt={result.data.title}
+                          className="batch-preview-image"
+                        />
+                        <div className="batch-result-info">
+                          <h4>{result.data.title}</h4>
+                          <p>作者: {result.data.author}</p>
+                          <div className="batch-result-actions">
+                            <a 
+                              href={result.data.url} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="view-button"
+                            >
+                              查看无水印
+                            </a>
+                            <button 
+                              onClick={() => result.data && copyToClipboard(result.data.url)}
+                              className="copy-button small"
+                            >
+                              复制链接
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {result.code !== 200 && (
+                      <div className="batch-result-error">
+                        {result.msg}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
       </div>
 
       {/* 历史记录展示 */}
@@ -487,7 +665,7 @@ function App() {
                     <p>{new Date(record.timestamp).toLocaleString()}</p>
                     <button
                       onClick={() => {
-                        setVideoUrl(record.videoUrl);
+                        setVideoUrls(record.videoUrl);
                         setVideoData(record.videoData);
                       }}
                       className="view-details-button"
