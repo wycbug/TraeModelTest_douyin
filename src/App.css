@@ -208,6 +208,15 @@ button:disabled {
   color: #e53e3e;
 }
 
+.result-error {
+  color: #e53e3e;
+  font-size: 0.9rem;
+  background: #fed7d7;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  margin-top: 0.5rem;
+}
+
 .result-summary {
   display: flex;
   gap: 1rem;
